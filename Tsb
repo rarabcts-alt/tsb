@@ -1,0 +1,507 @@
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import sqlite3
+import datetime
+import os
+
+# Bot Konfiguration
+BOT_TOKEN = "8376608496:AAERw3DqWgQxNaQ1l-KIfpAxFoV6Iaf34XU"  # ← Hier deinen Token einfügen!
+ADMIN_CHAT_ID = "6796931104"    # ← Deine persönliche Chat ID
+
+# Crypto Wallet Adressen
+CRYPTO_ADDRESSES = {
+    "bitcoin": "bc1q3u7m5le84m953fp9r3dqh7nd3rkexgefde7k64",
+    "ethereum": "0x512134137acECC27AabB217b258dAbbF9AEAf20A", 
+    "litecoin": "LUrUSmAmAGBi6XVLwptrikEU5cJebqdhkK",
+    "solana": "FxMhkLHUxcBRmPXFTLzaoy7qk75JYNx73iSYf7uxM8bM"
+}
+
+# Logging einrichten
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+# Datenbank einrichten
+def init_db():
+    conn = sqlite3.connect('support_bot.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS tickets
+                 (id INTEGER PRIMARY KEY, user_id INTEGER, username TEXT, 
+                  message TEXT, status TEXT, created_at TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY, username TEXT, 
+                  first_name TEXT, last_name TEXT, joined_at TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS payments
+                 (id INTEGER PRIMARY KEY, user_id INTEGER, crypto_type TEXT,
+                  amount REAL, status TEXT, created_at TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+
+# User Context Management
+user_states = {}
+
+# Start Command
+async def start(update: Update, context: CallbackContext) -> None:
+    # Handle both message and callback query
+    if update.message:
+        user = update.effective_user
+        message = update.message
+    else:
+        user = update.callback_query.from_user
+        message = update.callback_query.message
+    
+    keyboard = [
+        [InlineKeyboardButton("📞 Support Ticket", callback_data="support")],
+        [InlineKeyboardButton("❓ Häufige Fragen", callback_data="faq")],
+        [InlineKeyboardButton("🛒 Software kaufen", callback_data="buy")],
+        [InlineKeyboardButton("🔧 Technischer Support", callback_data="tech")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = f"""
+👋 Willkommen {user.first_name}!
+
+CRYPTO ENG™ MINING - Offizieller Support
+
+🤝 Wir helfen dir bei:
+• Software Installation
+• Lizenz-Problemen
+• Technischen Fragen
+• Kaufberatung
+
+📞 Wähle eine Option unten:"""
+    
+    # Check if we're editing a message or sending a new one
+    if update.callback_query:
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    
+    # User in DB speichern
+    save_user(user)
+    
+    # User State zurücksetzen
+    user_states[user.id] = "menu"
+
+def save_user(user):
+    conn = sqlite3.connect('support_bot.db')
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO users 
+                 (user_id, username, first_name, last_name, joined_at) 
+                 VALUES (?, ?, ?, ?, ?)''',
+              (user.id, user.username, user.first_name, user.last_name, datetime.datetime.now()))
+    conn.commit()
+    conn.close()
+
+# Button Handler
+async def button_handler(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "support":
+        user_states[user_id] = "waiting_for_ticket"
+        await support_ticket(query)
+    elif query.data == "faq":
+        user_states[user_id] = "menu"
+        await faq(query)
+    elif query.data == "buy":
+        user_states[user_id] = "menu"
+        await buy_software(query)
+    elif query.data == "tech":
+        user_states[user_id] = "menu"
+        await tech_support(query)
+    elif query.data in ["bitcoin", "ethereum", "litecoin", "solana"]:
+        await show_crypto_address(query, query.data)
+    elif query.data == "paid":
+        user_states[user_id] = "waiting_for_payment_proof"
+        await confirm_payment(query)
+    elif query.data == "back_to_menu":
+        await start(update, context)
+
+async def support_ticket(query):
+    text = """
+🎫 Support Ticket erstellen
+
+Bitte sende uns jetzt deine Frage als normale Nachricht!
+
+📋 Gib uns folgende Infos:
+• Dein Problem genau beschreiben
+• Lizenz-Schlüssel (falls vorhanden)
+• Fehlermeldungen (Screenshot wenn möglich)
+
+Wir antworten innerhalb von 24 Stunden! ⏰"""
+    
+    await query.edit_message_text(text)
+
+async def faq(query):
+    text = """
+❓ Häufige Fragen (FAQ)
+
+🤔 Wie installiere ich die Software?
+1. Lizenz kaufen (nur Crypto)
+2. Software downloaden
+3. Lizenzschlüssel eingeben
+4. Mining starten!
+
+💳 Zahlungsmethoden:
+• Bitcoin (BTC)
+• Ethereum (ETH) 
+• Litecoin (LTC)
+• Solana (SOL)
+
+🔑 Lizenz-Probleme?
+• Lizenz erneut eingeben
+• Internetverbindung prüfen
+• Support kontaktieren
+
+🛠️ Technische Probleme:
+• Admin-Rechte prüfen
+• Antivirus deaktivieren
+• Neustart versuchen
+
+📞 Weitere Fragen? Erstelle ein Support-Ticket!"""
+    
+    await query.edit_message_text(text)
+
+async def buy_software(query):
+    text = """
+🛒 CRYPTO ENG™ MINING kaufen
+
+💎 Version 1.0 - JETZT VERFÜGBAR!
+✅ Sofort loslegen
+✅ Voll funktionsfähig  
+✅ Vollständig geschützt
+✅ Telegram Benachrichtigungen
+
+💰 Preis: 349€ (Lifetime License)
+
+💳 Bezahlung nur mit Krypto:
+Wähle deine Kryptowährung:"""
+    
+    keyboard = [
+        [InlineKeyboardButton("Bitcoin (BTC)", callback_data="bitcoin")],
+        [InlineKeyboardButton("Ethereum (ETH)", callback_data="ethereum")],
+        [InlineKeyboardButton("Litecoin (LTC)", callback_data="litecoin")],
+        [InlineKeyboardButton("Solana (SOL)", callback_data="solana")],
+        [InlineKeyboardButton("🔙 Zurück", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup)
+
+async def show_crypto_address(query, crypto_type):
+    crypto_names = {
+        "bitcoin": "Bitcoin (BTC)",
+        "ethereum": "Ethereum (ETH)", 
+        "litecoin": "Litecoin (LTC)",
+        "solana": "Solana (SOL)"
+    }
+    
+    address = CRYPTO_ADDRESSES[crypto_type]
+    
+    text = f"""
+💳 Bezahlung mit {crypto_names[crypto_type]}
+
+💰 Betrag: 349€
+
+📧 Sende genau 349€ in {crypto_names[crypto_type]} an diese Adresse:
+
+`{address}`
+
+📋 **WICHTIG:**
+• Sende NUR {crypto_names[crypto_type]} an diese Adresse
+• Betrag muss genau 349€ entsprechen
+• Keine anderen Coins senden
+• Transaktion kann 10-30 Minuten dauern
+
+⬇️ Klicke unten auf "✅ Ich habe bezahlt" nachdem du gesendet hast."""
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Ich habe bezahlt", callback_data="paid")],
+        [InlineKeyboardButton("🔙 Andere Währung", callback_data="buy")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def confirm_payment(query):
+    text = """
+✅ Zahlung bestätigen
+
+📸 Bitte sende uns jetzt einen Screenshot deiner Transaktion als Bild.
+
+📋 Im Screenshot sollte sichtbar sein:
+• Gesendeter Betrag (349€)
+• Empfangsadresse (unsere Wallet)
+• Transaktions-ID/Hash
+• Sendedatum
+
+🔍 Wir überprüfen deine Zahlung innerhalb von 1-2 Stunden und senden dir dann deine Lizenz!"""
+    
+    await query.edit_message_text(text)
+
+async def tech_support(query):
+    text = """
+🔧 Technischer Support
+
+Bevor du ein Ticket erstellst:
+1. 🔄 Software neustarten
+2. 🌐 Internetverbindung prüfen
+3. 🛡️ Antivirus temporär deaktivieren
+4. ⚡ Als Administrator ausführen
+
+Häufige Lösungen:
+• Lizenz neu eingeben
+• Config.json löschen und neu starten
+• Neueste Version downloaden
+
+📋 Für technischen Support sende uns:
+• Fehlermeldung (Text oder Screenshot)
+• Lizenzschlüssel
+• Betriebssystem Info
+
+Wir helfen dir schnellstmöglich! 🚀"""
+    
+    await query.edit_message_text(text)
+
+# Nachrichten Handler für Support Tickets und Payment Proofs
+async def handle_message(update: Update, context: CallbackContext) -> None:
+    user = update.effective_user
+    user_state = user_states.get(user.id, "menu")
+    
+    # Handle Payment Proof (Screenshot)
+    if user_state == "waiting_for_payment_proof" and update.message.photo:
+        # Screenshot erhalten
+        await handle_payment_proof(update, context)
+        return
+        
+    message_text = update.message.text or "Kein Text (möglicherweise Medien)"
+    
+    # Handle Support Ticket Text
+    if user_state == "waiting_for_ticket":
+        await handle_support_ticket(update, context, user, message_text)
+        return
+    
+    # Handle andere Nachrichten - zeige Menü
+    keyboard = [
+        [InlineKeyboardButton("📞 Support Ticket", callback_data="support")],
+        [InlineKeyboardButton("❓ Häufige Fragen", callback_data="faq")],
+        [InlineKeyboardButton("🛒 Software kaufen", callback_data="buy")],
+        [InlineKeyboardButton("🔧 Technischer Support", callback_data="tech")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "Bitte wähle eine Option aus dem Menü:",
+        reply_markup=reply_markup
+    )
+
+async def handle_support_ticket(update: Update, context: CallbackContext, user, message_text):
+    # Ticket in DB speichern
+    save_ticket(user, message_text)
+    
+    # Bestätigung an User
+    await update.message.reply_text(
+        "✅ Ticket erhalten!\n\n"
+        "Wir haben deine Nachricht erhalten und werden uns innerhalb von 24 Stunden bei dir melden.\n\n"
+        "📧 Du wirst eine Antwort hier in diesem Chat erhalten.\n"
+        "⏰ Bitte habe etwas Geduld."
+    )
+    
+    # User State zurücksetzen
+    user_states[user.id] = "menu"
+    
+    # Benachrichtigung an Admin
+    admin_text = f"""
+🚨 NEUES SUPPORT TICKET
+
+👤 User: {user.first_name} (@{user.username})
+🆔 ID: {user.id}
+📝 Nachricht: {message_text}
+
+⏰ Zeit: {datetime.datetime.now().strftime("%d.%m.%Y %H:%M")}"""
+
+    try:
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text)
+    except Exception as e:
+        print(f"Admin Nachricht fehlgeschlagen: {e}")
+
+async def handle_payment_proof(update: Update, context: CallbackContext):
+    user = update.effective_user
+    
+    # Bestätigung an User
+    await update.message.reply_text(
+        "📸 Screenshot erhalten!\n\n"
+        "✅ Wir überprüfen deine Zahlung jetzt.\n"
+        "⏰ Bitte warte 1-2 Stunden für deine Lizenz.\n"
+        "📧 Du erhältst deine Lizenz hier in diesem Chat."
+    )
+    
+    # User State zurücksetzen
+    user_states[user.id] = "menu"
+    
+    # Benachrichtigung an Admin
+    admin_text = f"""
+💰 NEUE ZAHLUNG ZU ÜBERPRÜFEN
+
+👤 User: {user.first_name} (@{user.username})
+🆔 ID: {user.id}
+📸 Screenshot gesendet
+
+⏰ Zeit: {datetime.datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+🔍 Bitte überprüfe die Transaktion und sende die Lizenz!"""
+
+    try:
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text)
+        
+        # Screenshot an Admin weiterleiten
+        photo = update.message.photo[-1]  # Größtes Bild
+        await context.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=photo.file_id)
+        
+    except Exception as e:
+        print(f"Admin Benachrichtigung fehlgeschlagen: {e}")
+
+def save_ticket(user, message):
+    conn = sqlite3.connect('support_bot.db')
+    c = conn.cursor()
+    c.execute('''INSERT INTO tickets 
+                 (user_id, username, message, status, created_at) 
+                 VALUES (?, ?, ?, ?, ?)''',
+              (user.id, user.username, message, 'offen', datetime.datetime.now()))
+    conn.commit()
+    conn.close()
+
+# Admin Commands
+async def admin_stats(update: Update, context: CallbackContext) -> None:
+    if str(update.effective_user.id) != ADMIN_CHAT_ID:
+        await update.message.reply_text("❌ Zugriff verweigert.")
+        return
+    
+    conn = sqlite3.connect('support_bot.db')
+    c = conn.cursor()
+    
+    # User Statistiken
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM tickets WHERE status='offen'")
+    open_tickets = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM tickets")
+    total_tickets = c.fetchone()[0]
+    
+    conn.close()
+    
+    stats_text = f"""
+📊 BOT STATISTIKEN
+
+👥 Total Users: {total_users}
+🎫 Offene Tickets: {open_tickets}
+📨 Total Tickets: {total_tickets}
+
+🕒 Last Update: {datetime.datetime.now().strftime("%d.%m.%Y %H:%M")}"""
+    
+    await update.message.reply_text(stats_text)
+
+# Antwort auf Tickets
+async def reply_to_ticket(update: Update, context: CallbackContext) -> None:
+    if str(update.effective_user.id) != ADMIN_CHAT_ID:
+        return
+        
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Verwendung: /reply USER_ID NACHRICHT")
+        return
+        
+    try:
+        user_id = int(context.args[0])
+        message = ' '.join(context.args[1:])
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"📩 Antwort vom Support:\n\n{message}\n\n💬 Du kannst weiter antworten wenn needed."
+        )
+        
+        await update.message.reply_text("✅ Antwort gesendet!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Fehler: {e}")
+
+# Lizenz senden Command
+async def send_license(update: Update, context: CallbackContext) -> None:
+    if str(update.effective_user.id) != ADMIN_CHAT_ID:
+        return
+        
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Verwendung: /license USER_ID LIZENZSCHLÜSSEL")
+        return
+        
+    try:
+        user_id = int(context.args[0])
+        license_key = ' '.join(context.args[1:])
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"🎉 DEINE LIZENZ IST BEREIT! 🎉\n\n"
+                 f"🔑 Dein Lizenzschlüssel:\n"
+                 f"`{license_key}`\n\n"
+                 f"📥 **So aktivierst du die Lizenz:**\n"
+                 f"1. Öffne CRYPTO ENG™ MINING Software\n"
+                 f"2. Gib diesen Lizenzschlüssel ein\n"
+                 f"3. Klicke auf 'System Start'\n"
+                 f"4. Starte das Mining! 🚀\n\n"
+                 f"💎 Viel Erfolg beim Mining!",
+            parse_mode='Markdown'
+        )
+        
+        await update.message.reply_text("✅ Lizenz gesendet!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Fehler: {e}")
+
+# Cancel Command
+async def cancel(update: Update, context: CallbackContext) -> None:
+    user = update.effective_user
+    user_states[user.id] = "menu"
+    
+    keyboard = [
+        [InlineKeyboardButton("📞 Support Ticket", callback_data="support")],
+        [InlineKeyboardButton("❓ Häufige Fragen", callback_data="faq")],
+        [InlineKeyboardButton("🛒 Software kaufen", callback_data="buy")],
+        [InlineKeyboardButton("🔧 Technischer Support", callback_data="tech")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "❌ Aktion abgebrochen. Wähle eine Option:",
+        reply_markup=reply_markup
+    )
+
+# Bot starten
+def main():
+    # Datenbank initialisieren
+    init_db()
+    
+    # Application erstellen
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Handler hinzufügen
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", admin_stats))
+    application.add_handler(CommandHandler("reply", reply_to_ticket))
+    application.add_handler(CommandHandler("license", send_license))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+    
+    # Bot starten
+    print("🤖 Support Bot gestartet...")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
